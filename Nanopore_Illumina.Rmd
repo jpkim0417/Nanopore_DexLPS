@@ -1,0 +1,712 @@
+---
+title: "Nanopore vs. Illumina"
+output:
+  pdf_document: default
+  html_document: default
+date: "2023-08-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r cars}
+library(tximport)
+library(DEXSeq)
+library(rnaseqDTU)
+library(devtools)
+library(wasabi)
+
+library(stageR)
+library(reshape2)
+library(ggplot2)
+library(ggbeeswarm)
+library(data.table)
+library(GenomicFeatures)
+library(dplyr)
+library(tidyr)
+library(stringr)
+```
+
+###GO annotation
+```{r}
+library(BiocManager)
+
+library(clusterProfiler)
+library(AnnotationDbi)
+
+library(org.Mm.eg.db)
+```
+
+
+samps file need to be changed
+```{r}
+dir = "/Users/junpyokim/R/"
+sampleData = paste0(dir, "Nanopore_Illumina_samples.txt")
+sampleData = fread(sampleData)
+rownames(sampleData) = sampleData$sample_id
+sampleData$group = as.factor(sampleData$group)
+```
+
+Illumina as reference
+```{r}
+sampleData$group = relevel(sampleData$group, ref = "Illumina") 
+samps = data.frame(sample_id = sampleData$sample_id, group = sampleData$group)
+samps
+```
+
+GTF -> sqlite /// TxDB
+```{r}
+gtf <- "gencode.vM32.chr_patch_hapl_scaff.annotation.gtf"
+txdb.filename <- "gencode.vM32.annotation.sqlite"
+txdb <- makeTxDbFromGFF(gtf)
+txdb
+genes(txdb)
+```
+
+txdf with the transcript and gene identifiers
+```{r}
+k = keys(txdb, keytype = "GENEID")
+txdf = AnnotationDbi::select(txdb, k, "TXNAME","GENEID")
+head(txdf)
+```
+
+file calling!!
+```{r}
+
+process_file <- function(file_path, name) {
+  data <- read.table(file_path, header = TRUE, sep = "\t", quote = "")
+  data$transcript_name <- sub("\\|.*", "", data$transcript_name)
+  return(data)
+}
+
+file_info <- list(
+  list(file_path = "~/R/nanocount/DexLPS/BMDMs_6hDexLPS_no8_mm39_minimap_transcript_nanocount_counts.tsv", name = "DexLPS_rep1"),
+  list(file_path = "~/R/nanocount/DexLPS/BMDMs_6hDL_rep2_no8_mm39_minimap_transcript_nanocount_counts.tsv", name = "DexLPS_rep2"),
+  list(file_path = "~/R/nanocount/DexLPS/BMDMs_6hDL_rep3_no8_mm39_minimap_transcript_nanocount_counts.tsv", name = "DexLPS_rep3"),
+  list(file_path = "~/R/nanocount/LPS/BMDMs_6hLPS_no8_mm39_minimap_transcript_nanocount_counts.tsv", name = "LPS_rep1"),
+  list(file_path = "~/R/nanocount/LPS/BMDMs_6hLPS_rep2_mm39_minimap_transcript_nanocount_counts.tsv", name = "LPS_rep2"),
+  list(file_path = "~/R/nanocount/LPS/BMDMs_6hLPS_rep3_mm39_minimap_transcript_nanocount_counts.tsv", name = "LPS_rep3"),
+  list(file_path = "~/R/nanocount/Illumina/BMDM_6hDL_rep1_illumina_mm39_minimap_transcript_nanocount_counts.tsv", name = "Illumina_DL_rep1"),
+  list(file_path = "~/R/nanocount/Illumina/BMDM_6hDL_rep2_illumina_mm39_minimap_transcript_nanocount_counts.tsv", name = "Illumina_DL_rep2"),
+  list(file_path = "~/R/nanocount/Illumina/BMDM_6hDL_rep3_illumina_mm39_minimap_transcript_nanocount_counts.tsv", name = "Illumina_DL_rep3")
+)
+
+for (file_info_entry in file_info) {
+  file_path <- file_info_entry$file_path
+  name <- file_info_entry$name
+  assign(name, process_file(file_path, name))
+}
+
+
+```
+
+
+
+
+
+
+Illumina vs. Nanopore (DexLPS)
+```{r}
+merged_data_Illumina <- left_join(DexLPS_rep1, DexLPS_rep2, by = "transcript_name") %>%
+  left_join(DexLPS_rep3, by="transcript_name") %>%
+  left_join(Illumina_DL_rep1, by="transcript_name") %>%
+  left_join(Illumina_DL_rep2, by="transcript_name") %>%
+  left_join(Illumina_DL_rep3, by="transcript_name")
+  
+cols_to_replace <- c("est_count.y", "est_count.x.x", "est_count.y.y", 
+                     "est_count.x.x.x", "est_count.y.y.y")
+for (col in cols_to_replace) {
+  merged_data_Illumina[[col]][is.na(merged_data_Illumina[[col]])] <- 0
+}
+
+merged_data_Illumina <- select(merged_data_Illumina, transcript_name, est_count.x, est_count.y, est_count.x.x, est_count.y.y, est_count.x.x.x, est_count.y.y.y)
+
+colnames(merged_data_Illumina) <- c("transcript_name", "DexLPS_rep1", "DexLPS_rep2", "DexLPS_rep3", "Illumina_DL_rep1", "Illumina_DL_rep2", "Illumina_DL_rep3")
+head(merged_data_Illumina)
+```
+
+```{r}
+rownames(merged_data_Illumina) <- merged_data_Illumina$transcript_name
+merged_data_Illumina$transcript_name <- NULL
+head(merged_data_Illumina)
+```
+
+
+```{r}
+merged_data_Illumina = merged_data_Illumina[rowSums(merged_data_Illumina) > 0,] #Ohne (count = 18004)
+dim(merged_data_Illumina) 
+range(colSums(merged_data_Illumina)) #114895.5 and 591403.1 paired-end reads that were mapped to the transcriptome using Nanocount
+```
+
+```{r}
+#Pre-filter with DRIMSeq dmFilter
+txdf.sub = txdf[match(rownames(merged_data_Illumina),txdf$TXNAME),]
+counts = data.frame(gene_id = txdf.sub$GENEID, feature_id = txdf.sub$TXNAME, merged_data_Illumina)
+
+d = DRIMSeq::dmDSdata(counts = counts, samples = samps)
+d
+
+n = nrow(samps)
+n.small = min(table(samps$group))
+
+d = DRIMSeq::dmFilter(d,
+                      min_samps_feature_expr = n.small, min_feature_expr = 10,
+                      min_samps_feature_prop = n.small, min_feature_prop = 0.1,
+                      min_samps_gene_expr = n, min_gene_expr =10)    
+d #551 genes
+```
+
+DEXSeq procedure
+```{r}
+countData = round(as.matrix(counts(d)[,-c(1:2)]))
+
+dxd = DEXSeqDataSet(countData = countData, sampleData = samps, design = ~sample + exon + group:exon, featureID = counts(d)$feature_id, groupID = counts(d)$gene_id)
+
+system.time({
+        dxd = estimateSizeFactors(dxd)
+        dxd = estimateDispersions(dxd)
+        dxd = testForDEU(dxd, reducedModel = ~sample + exon)
+})
+
+dxr = DEXSeqResults(dxd, independentFiltering = FALSE)
+
+qval = perGeneQValue(dxr)
+dxr.g = data.frame(gene = names(qval), qval)
+dxr.t = as.data.frame(dxr[,c("featureID","groupID","pvalue")])
+dim(dxr.g)
+head(dxr.g)
+dim(dxr.t)
+head(dxr.t)
+
+dim(dxr.g[dxr.g$qval < 0.05,]) # 416 genes ::: DEXSeq test identified 416 genes showing evidence of isoform switching involving 1070 transcripts.
+dim(dxr[dxr$padj < 0.05,])  # 1070 transcripts
+
+```
+
+
+
+
+StageR procedure : Strip away the version numbers in the Ensembl gene and transcript IDs
+
+```{r warning=TRUE}
+strp <- function(x) substr(x,1,18)
+
+pScreen = qval
+names(pScreen) = strp(names(pScreen))
+
+#tx2gene[match(rownames(pConfirmation), tx2gene[,1]),2]
+pConfirmation = matrix(dxr.t$pvalue, ncol=1)
+dimnames(pConfirmation) = list(strp(dxr.t$featureID),"transcript")
+
+
+tx2gene = data.frame(dxr.t[,c("featureID", "groupID")], dxr.t[,c("featureID", "groupID")]) 
+for (i in 1:2) tx2gene[,i] = strp(tx2gene[,i])
+
+
+stageRObj = stageRTx(pScreen = pScreen, pConfirmation = pConfirmation, pScreenAdjusted = TRUE, tx2gene = tx2gene[1:2])
+stageRObj = stageWiseAdjustment(stageRObj, method = "dtu", alpha = 0.05) 
+
+dex.padj = getAdjustedPValues(stageRObj, order = FALSE, onlySignificantGenes = TRUE)
+
+dex.padj = merge(tx2gene, dex.padj, by.x = c("groupID","featureID"), by.y = c("geneID","txID"))
+
+
+length(unique(dex.padj[dex.padj$gene < 0.05,]$groupID)) #416 screened genes in this dataset, 1024 transcripts pass the confirmation stage on a target 5% overall false discovery rate(OFDR)
+                                                        #DEXSeq result = 416 genes, 1024 transcripts
+table(dex.padj$transcript < 0.05)
+```
+
+#Exporting results
+
+```{r}
+annoData = "/Users/junpyokim/R/gencode.vM32.annotation_transcripts.txt"
+annoData = data.frame(fread(annoData))
+
+dex.norm = cbind(as.data.frame(stringr::str_split_fixed(rownames(counts(dxd)), ":", 2)), as.data.frame(counts(dxd, normalized = TRUE))[,1:6])
+colnames(dex.norm) = c("groupID", "featureID", as.character(colData(dxd)$sample_id)[1:6])
+row.names(dex.norm) = NULL
+
+#Per-group normalised mean
+dex.mean = as.data.frame(sapply( levels(samps$group), function(lvl) rowMeans(dex.norm[,3:ncol(dex.norm)][, samps$group == lvl, drop = FALSE]) ))
+
+#log2-fold change in expression
+dex.log2fc = log2(dex.mean[2]/dex.mean[1])
+colnames(dex.log2fc) = "log2fc"
+rownames(dex.log2fc) = dex.norm$featureID
+
+#Merge to create result data
+dexData = cbind(dex.norm[,1:2], dex.mean, dex.norm[,3:ncol(dex.norm)])
+dexData = merge(annoData, dexData, by.x = c("GeneID","TranscriptID"), by.y = c("groupID","featureID"))
+dexData = dexData[order(dexData$GeneID, dexData$TranscriptID),]
+
+
+#Merge to create result data -- We don't have dex.padj...
+dexDTU = merge(dex.padj[,c("featureID.1","groupID.1","gene","transcript")], dex.log2fc, by.x = "featureID.1", by.y = "row.names")
+  ###dex.padj = NULL
+dexDTU = merge(annoData, dexDTU, by.x = c("GeneID","TranscriptID"), by.y = c("groupID.1","featureID.1"))
+dexDTU = dexDTU[order(dexDTU$GeneID, dexDTU$TranscriptID),]
+
+
+#Write results to files
+write.table(dexData, file="NaIll_DTU_DEXSeq-stageR_means_and_counts.txt", sep = "\t", quote = F, row.names = F, col.names = T)
+write.table(dexDTU, file="NAIll_DTU_DEXSeq-stageR_results.txt", sep = "\t", quote = F, row.names = F, col.names = T)
+
+```
+
+
+#Exploring results
+```{r}
+
+  #making function called plotExpression
+plotExpression <- function(expData = NULL, geneID = NULL, samps = NULL, isProportion = FALSE) {
+  colnames(expData)[1:2] = c("gid","tid")
+  sub = subset(expData, gid == geneID)
+  sub = reshape2::melt(sub, id = c("gid", "tid"))
+  sub = merge(samps, sub, by.x = "sample_id", by.y = "variable")
+  if(!isProportion) {
+    sub$value = log(sub$value)
+  }
+  
+  clrs = c("dodgerblue3", "maroon2",  "forestgreen", "darkorange1", "blueviolet", "firebrick2",
+           "deepskyblue", "orchid2", "chartreuse3", "gold", "slateblue1", "tomato" , "blue", "magenta", "green3",
+           "yellow", "purple3", "red" ,"darkslategray1", "lightpink1", "lightgreen", "khaki1", "plum3", "salmon")
+  
+  p = ggplot(sub, aes(tid, value, color = group, fill = group)) +
+    geom_boxplot(alpha = 0.4, outlier.shape = NA, width = 0.8, lwd = 0.5) +
+    stat_summary(fun = mean, geom = "point", color = "black", shape = 5, size = 2, position=position_dodge(width = 0.8)) +
+    scale_color_manual(values = clrs) + scale_fill_manual(values = clrs) +
+    geom_quasirandom(color="black", size = 1) + theme_bw() +
+    ggtitle(geneID) + xlab("Transcripts")
+  
+  if(!isProportion) {
+    p = p + ylab("log(Expression)")
+  } else {
+    p = p + ylab("Proportions")
+  }
+  p
+}
+
+
+#Plot the normalised counts for one of the significant genes, where we can see evidence of switching
+gene_id = unique(dex.padj[order(dex.padj$transcript, dex.padj$gene),]$groupID.1)[2] # To plot other genes, then Just change number in []
+
+png("NaIll_plotExpression.DEXSeq-stageR.png", width=6, height=6, units = "in", res = 300)
+plotExpression(dex.norm, gene_id, samps, isProportion = FALSE)
+
+```
+
+
+
+
+
+
+
+
+
+
+Illumina vs. Nanopore (tpm)
+```{r}
+merged_data_Illumina_tpm <- left_join(DexLPS_rep1, DexLPS_rep2, by = "transcript_name") %>%
+  left_join(DexLPS_rep3, by="transcript_name") %>%
+  left_join(Illumina_DL_rep1, by="transcript_name") %>%
+  left_join(Illumina_DL_rep2, by="transcript_name") %>%
+  left_join(Illumina_DL_rep3, by="transcript_name")
+  
+cols_to_replace <- c("tpm.y", "tpm.x.x", "tpm.y.y", 
+                     "tpm.x.x.x", "tpm.y.y.y")
+for (col in cols_to_replace) {
+  merged_data_Illumina_tpm[[col]][is.na(merged_data_Illumina_tpm[[col]])] <- 0
+}
+
+merged_data_Illumina_tpm <- select(merged_data_Illumina_tpm, transcript_name, tpm.x, tpm.y, tpm.x.x, tpm.y.y, tpm.x.x.x, tpm.y.y.y)
+
+colnames(merged_data_Illumina_tpm) <- c("transcript_name", "Nanopore_DexLPS_rep1", "Nanopore_DexLPS_rep2", "Nanopore_DexLPS_rep3", "Illumina_DL_rep1", "Illumina_DL_rep2", "Illumina_DL_rep3")
+head(merged_data_Illumina_tpm)
+```
+
+```{r}
+rownames(merged_data_Illumina_tpm) <- merged_data_Illumina_tpm$transcript_name
+merged_data_Illumina_tpm$transcript_name <- NULL
+head(merged_data_Illumina_tpm)
+```
+
+#Number of Transcripts using TPM
+```{r}
+merged_data_Illumina_tpm = merged_data_Illumina_tpm[rowSums(merged_data_Illumina_tpm) > 0,]
+merged_data_Illumina_tpm_counts <- apply(merged_data_Illumina_tpm, 2, function(col) sum(col>0))
+print(merged_data_Illumina_tpm_counts)
+merged_data_Illumina_tpm_2 = data.frame(gene_id = txdf.sub$GENEID, feature_id = txdf.sub$TXNAME, merged_data_Illumina_tpm)
+```
+
+
+
+```{r}
+plot_data <- data.frame(Sample = names(merged_data_Illumina_tpm_counts), Row_Count = merged_data_Illumina_tpm_counts)
+sample_colors <- c("blue","blue","blue","orange","orange","orange")
+ggplot(plot_data, aes(x = Sample, y = Row_Count, fill = Sample)) +
+  geom_bar(stat = "identity") + 
+  scale_fill_manual(values = sample_colors) +
+  labs(x = "",y = "Number of Transcripts") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggtitle("Number of transcripts for each sample")
+```
+
+The highest expressed Transcript
+```{r}
+highest_row <- apply(merged_data_Illumina_tpm, 2, function(col) {
+  row_names <- row.names(merged_data_Illumina_tpm)
+  highest_row_index <- which.max(col)
+  row_names[highest_row_index]
+})
+highest_row_table <- data.frame(Highest_Row = highest_row)
+print(highest_row_table)
+write.csv(highest_row_table, file = "Nano_Ill_highest_row_table_Illumina_DexLPS.csv", row.names=TRUE)
+
+```
+
+The highest top 10 Transcripts
+```{r}
+top_10_rows <- apply(merged_data_Illumina_tpm, 2, function(col) {
+  row_names <- row.names(merged_data_Illumina_tpm)
+  top_10_indices <- order(col, decreasing = TRUE)[1:10]
+  row_names[top_10_indices]
+})
+
+top_10_rows_table <- data.frame(top_10_rows)
+print(top_10_rows_table)
+write.csv(top_10_rows_table, file = "NanIll_top_10_rows_table_Illumina_DexLPS.csv", row.names=TRUE)
+
+
+unique_contents <- unique(unlist(top_10_rows_table))
+```
+
+Isoform/Transcripts
+```{r}
+transcripts_counts <- table(merged_data_Illumina_tpm_2$gene_id)  #Isoform among the all samples(sometimes : even though it's not isoform of each sample)
+
+#Nanopore_DexLPS_rep1
+Nanopore_DexLPS_rep1_table <- merged_data_Illumina_tpm_2[,c(1,2,3)]
+filtered_Nanopore_DexLPS_rep1_table <- Nanopore_DexLPS_rep1_table[Nanopore_DexLPS_rep1_table[,3] != 0,]
+geneID_counts_Nanopore_DexLPS_rep1 <- table(filtered_Nanopore_DexLPS_rep1_table$gene_id)
+Isoform_count_Nanopore_DexLPS_rep1 <- geneID_counts_Nanopore_DexLPS_rep1[geneID_counts_Nanopore_DexLPS_rep1 > 1] #For the comparison each transcript number
+
+Isoform_transcripts_Nanopore_DexLPS_rep1 <- names(geneID_counts_Nanopore_DexLPS_rep1[geneID_counts_Nanopore_DexLPS_rep1 > 1])
+Nanopore_DexLPS_rep1_isoform <- data.frame(Nanopore_DexLPS_rep1 = Isoform_transcripts_Nanopore_DexLPS_rep1)
+
+#Nanopore_DexLPS_rep2
+Nanopore_DexLPS_rep2_table <- merged_data_Illumina_tpm_2[,c(1,2,4)]
+filtered_Nanopore_DexLPS_rep2_table <- Nanopore_DexLPS_rep2_table[Nanopore_DexLPS_rep2_table[,3] != 0,]
+geneID_counts_Nanopore_DexLPS_rep2 <- table(filtered_Nanopore_DexLPS_rep2_table$gene_id)
+Isoform_count_Nanopore_DexLPS_rep2 <- geneID_counts_Nanopore_DexLPS_rep2[geneID_counts_Nanopore_DexLPS_rep2 > 1] #For the comparison each transcript number
+
+Isoform_transcripts_Nanopore_DexLPS_rep2 <- names(geneID_counts_Nanopore_DexLPS_rep2[geneID_counts_Nanopore_DexLPS_rep2 > 1])
+Nanopore_DexLPS_rep2_isoform <- data.frame(Nanopore_DexLPS_rep2 = Isoform_transcripts_Nanopore_DexLPS_rep2)
+
+#Nanopore_DexLPS_rep3
+Nanopore_DexLPS_rep3_table <- merged_data_Illumina_tpm_2[,c(1,2,5)]
+filtered_Nanopore_DexLPS_rep3_table <- Nanopore_DexLPS_rep3_table[Nanopore_DexLPS_rep3_table[,3] != 0,]
+geneID_counts_Nanopore_DexLPS_rep3 <- table(filtered_Nanopore_DexLPS_rep3_table$gene_id)
+Isoform_count_Nanopore_DexLPS_rep3 <- geneID_counts_Nanopore_DexLPS_rep3[geneID_counts_Nanopore_DexLPS_rep3 > 1] #For the comparison each transcript number
+
+Isoform_transcripts_Nanopore_DexLPS_rep3 <- names(geneID_counts_Nanopore_DexLPS_rep3[geneID_counts_Nanopore_DexLPS_rep3 > 1])
+Nanopore_DexLPS_rep3_isoform <- data.frame(Nanopore_DexLPS_rep3 = Isoform_transcripts_Nanopore_DexLPS_rep3)
+
+
+#Illumina_DexLPS_rep1
+Illumina_DexLPS_rep1_table <- merged_data_Illumina_tpm_2[,c(1,2,6)]
+filtered_Illumina_DexLPS_rep1_table <- Illumina_DexLPS_rep1_table[Illumina_DexLPS_rep1_table[,3] != 0,]
+geneID_counts_Illumina_DexLPS_rep1 <- table(filtered_Illumina_DexLPS_rep1_table$gene_id)
+Isoform_count_Illumina_DexLPS_rep1 <- geneID_counts_Illumina_DexLPS_rep1[geneID_counts_Illumina_DexLPS_rep1 > 1] #For the comparison each transcript number
+
+Isoform_transcripts_Illumina_DexLPS_rep1 <- names(geneID_counts_Illumina_DexLPS_rep1[geneID_counts_Illumina_DexLPS_rep1 > 1])
+Illumina_DexLPS_rep1_isoform <- data.frame(Illumina_DexLPS_rep1 = Isoform_transcripts_Illumina_DexLPS_rep1)
+
+#Illumina_DexLPS_rep2
+Illumina_DexLPS_rep2_table <- merged_data_Illumina_tpm_2[,c(1,2,7)]
+filtered_Illumina_DexLPS_rep2_table <- Illumina_DexLPS_rep2_table[Illumina_DexLPS_rep2_table[,3] != 0,]
+geneID_counts_Illumina_DexLPS_rep2 <- table(filtered_Illumina_DexLPS_rep2_table$gene_id)
+Isoform_count_Illumina_DexLPS_rep2 <- geneID_counts_Illumina_DexLPS_rep2[geneID_counts_Illumina_DexLPS_rep2 > 1] #For the comparison each transcript number
+
+Isoform_transcripts_Illumina_DexLPS_rep2 <- names(geneID_counts_Illumina_DexLPS_rep2[geneID_counts_Illumina_DexLPS_rep2 > 1])
+Illumina_DexLPS_rep2_isoform <- data.frame(Illumina_DexLPS_rep2 = Isoform_transcripts_Illumina_DexLPS_rep2)
+
+#Illumina_DexLPS_rep3
+Illumina_DexLPS_rep3_table <- merged_data_Illumina_tpm_2[,c(1,2,8)]
+filtered_Illumina_DexLPS_rep3_table <- Illumina_DexLPS_rep3_table[Illumina_DexLPS_rep3_table[,3] != 0,]
+geneID_counts_Illumina_DexLPS_rep3 <- table(filtered_Illumina_DexLPS_rep3_table$gene_id)
+Isoform_count_Illumina_DexLPS_rep3 <- geneID_counts_Illumina_DexLPS_rep3[geneID_counts_Illumina_DexLPS_rep3 > 1] #For the comparison each transcript number
+
+Isoform_transcripts_Illumina_DexLPS_rep3 <- names(geneID_counts_Illumina_DexLPS_rep3[geneID_counts_Illumina_DexLPS_rep3 > 1])
+Illumina_DexLPS_rep3_isoform <- data.frame(Illumina_DexLPS_rep3 = Isoform_transcripts_Illumina_DexLPS_rep3)
+```
+
+
+```{r}
+merged_Isoform <- merge(Isoform_count_Nanopore_DexLPS_rep1, Isoform_count_Nanopore_DexLPS_rep2, by.x=1, by.y=1, all=TRUE)
+merged_Isoform <- merge(merged_Isoform, Isoform_count_Nanopore_DexLPS_rep3, by.x=1, by.y=1, all=TRUE)
+merged_Isoform <- merge(merged_Isoform, Isoform_count_Illumina_DexLPS_rep1, by.x=1, by.y=1, all=TRUE)
+merged_Isoform <- merge(merged_Isoform, Isoform_count_Illumina_DexLPS_rep2, by.x=1, by.y=1, all=TRUE)
+merged_Isoform <- merge(merged_Isoform, Isoform_count_Illumina_DexLPS_rep3, by.x=1, by.y=1, all=TRUE)
+colnames(merged_Isoform) <- c("gene_ID", "Nanopore_DexLPS_rep1", "Nanopore_DexLPS_rep2","Nanopore_DexLPS_rep3", "Illumina_DexLPS_rep1", "Illumina_DexLPS_rep2","Illumina_DexLPS_rep3")
+
+```
+
+
+
+```{r}
+merged_Isoform_average <- as.data.frame(merged_Isoform)
+average_Nanopore_DexLPS <- rowMeans(merged_Isoform_average[,2:4], na.rm = TRUE)
+average_Illumina_DexLPS <- rowMeans(merged_Isoform_average[,5:7], na.rm = TRUE)
+
+merged_Isoform_average <- data.frame(
+  gene_ID = merged_Isoform_average[,1],
+  Nanopore_DexLPS = average_Nanopore_DexLPS,
+  Illumina_DexLPS = average_Illumina_DexLPS
+)
+
+```
+
+
+
+```{r}
+merged_Isoform_long <- gather(merged_Isoform, key = "sample", value = "gene_count", -gene_ID)
+
+frequency_data <- merged_Isoform_long %>%
+      group_by(sample, gene_count) %>%
+      summarize(frequency = n()) %>%
+      na.omit()
+
+
+merged_Isoform_average_long <- gather(merged_Isoform_average, key ="sample", value = "gene_count", -gene_ID)
+
+frequency_data_average <- merged_Isoform_average_long %>%
+  group_by(sample, gene_count) %>%
+  summarize(frequency = n())
+```
+
+```{r}
+ggplot(frequency_data, aes(x = gene_count, y = frequency, fill = sample)) +
+      geom_bar(stat = "identity", position = "dodge") +
+     labs(title = "Gene Counts Distribution of Frequency by sample (Nanopore vs. Illumina)",
+          x = "Gene_Count",
+          y = "Frequency") +
+      theme_minimal()
+
+ggplot(frequency_data_average, aes(x = gene_count, y = frequency, fill = sample)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Average Gene Counts Distribution of Frequency by sample (Nanopore vs. Illumina)",
+       x = "Gene_Count",
+       y = "Frequency") +
+  theme_minimal()
+```
+
+```{r}
+ggplot(frequency_data_average, aes(x = gene_count, fill = sample)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Gene_Count_Distribution (Nanopore vs. Illumina)",
+       x = "Gene_Count",
+       y = "Frequency") +
+  theme_minimal()
+```
+
+
+
+###GO annotation
+```{r}
+library(BiocManager)
+BiocManager::install("clusterProfiler")
+library(clusterProfiler)
+BiocManager::install("AnnotationDbi")
+library(AnnotationDbi)
+BiocManager::install("org.Mm.eg.db")
+library(org.Mm.eg.db)
+```
+
+###Nanopore_DexLPS Ontology
+```{r, echo=FALSE}
+Nanopore_DexLPS_rep1_tpm <- merged_data_Illumina_tpm_2[,c(1,3)]
+GO_Nanopore_DexLPS_rep1 <- apply(Nanopore_DexLPS_rep1_tpm, 2, function(col) {
+  row_names <- Nanopore_DexLPS_rep1_tpm[,1]
+  top_100_indices <- order(col, decreasing = TRUE)[1:100]
+  row_names[top_100_indices]
+})
+GO_Nanopore_rep1 <- GO_Nanopore_DexLPS_rep1[,2]
+GO_Nanopore_rep1 <- sub("\\..*", "", GO_Nanopore_rep1)
+GO_Nanopore_rep1_result <- enrichGO(gene = GO_Nanopore_rep1, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Nanopore_rep1_result)
+fitNanopore_1 <- plot(barplot(GO_Nanopore_rep1_result, showCategory = 20))
+fitNanopore_1   # 3 enriched terms found
+
+
+Nanopore_DexLPS_rep2_tpm <- merged_data_Illumina_tpm_2[,c(1,4)]
+GO_Nanopore_DexLPS_rep2 <- apply(Nanopore_DexLPS_rep2_tpm, 2, function(col) {
+  row_names <- Nanopore_DexLPS_rep2_tpm[,1]
+  top_100_indices <- order(col, decreasing = TRUE)[1:100]
+  row_names[top_100_indices]
+})
+GO_Nanopore_rep2 <- GO_Nanopore_DexLPS_rep2[,2]
+GO_Nanopore_rep2 <- sub("\\..*", "", GO_Nanopore_rep2)
+GO_Nanopore_rep2_result <- enrichGO(gene = GO_Nanopore_rep2, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Nanopore_rep2_result)
+fitNanopore_2 <- plot(barplot(GO_Nanopore_rep2_result, showCategory = 20))
+fitNanopore_2   # 0 enriched terms found
+
+Nanopore_DexLPS_rep3_tpm <- merged_data_Illumina_tpm_2[,c(1,5)]
+GO_Nanopore_DexLPS_rep3 <- apply(Nanopore_DexLPS_rep3_tpm, 2, function(col) {
+  row_names <- Nanopore_DexLPS_rep3_tpm[,1]
+  top_100_indices <- order(col, decreasing = TRUE)[1:100]
+  row_names[top_100_indices]
+})
+GO_Nanopore_rep3 <- GO_Nanopore_DexLPS_rep3[,2]
+GO_Nanopore_rep3 <- sub("\\..*", "", GO_Nanopore_rep3)
+GO_Nanopore_rep3_result <- enrichGO(gene = GO_Nanopore_rep3, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Nanopore_rep3_result)
+fitNanopore_3 <- plot(barplot(GO_Nanopore_rep3_result, showCategory = 20))
+fitNanopore_3   # 0 enriched terms found
+
+###unified DexLPS
+
+gene_Nanopore = c(GO_Nanopore_rep1, GO_Nanopore_rep2, GO_Nanopore_rep3) 
+GO_Nanopore_result <- enrichGO(gene = gene_Nanopore, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Nanopore_result)
+fitNanopore <- plot(barplot(GO_Nanopore_result, showCategory = 20))
+fitNanopore # 87 enriched terms found
+
+```
+```{r}
+
+fitNanopore_1
+fitNanopore
+```
+
+
+
+###Illumina_DexLPS Ontology
+```{r, echo=FALSE}
+Illumina_DexLPS_rep1_tpm <- merged_data_Illumina_tpm_2[,c(1,6)]
+GO_Illumina_rep1 <- apply(Illumina_DexLPS_rep1_tpm, 2, function(col) {
+  row_names <- Illumina_DexLPS_rep1_tpm[,1]
+  top_100_indices <- order(col, decreasing = TRUE)[1:100]
+  row_names[top_100_indices]
+})
+GO_Illumina_rep1 <- GO_Illumina_rep1[,2]
+GO_Illumina_rep1 <- sub("\\..*", "", GO_Illumina_rep1)
+GO_Illumina_rep1_result <- enrichGO(gene = GO_Illumina_rep1, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Illumina_rep1_result)
+fitIllumina_1 <- plot(barplot(GO_Illumina_rep1_result, showCategory = 20))
+fitIllumina_1  # 53 enriched terms found
+
+Illumina_DexLPS_rep2_tpm <- merged_data_Illumina_tpm_2[,c(1,7)]
+GO_Illumina_rep2 <- apply(Illumina_DexLPS_rep2_tpm, 2, function(col) {
+  row_names <- Illumina_DexLPS_rep2_tpm[,1]
+  top_100_indices <- order(col, decreasing = TRUE)[1:100]
+  row_names[top_100_indices]
+})
+GO_Illumina_rep2 <- GO_Illumina_rep2[,2]
+GO_Illumina_rep2 <- sub("\\..*", "", GO_Illumina_rep2)
+GO_Illumina_rep2_result <- enrichGO(gene = GO_Illumina_rep2, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Illumina_rep2_result)
+fitIllumina_2 <- plot(barplot(GO_Illumina_rep2_result, showCategory = 20))
+fitIllumina_2    # 264 enriched terms found
+
+Illumina_DexLPS_rep3_tpm <- merged_data_Illumina_tpm_2[,c(1,8)]
+GO_Illumina_rep3 <- apply(Illumina_DexLPS_rep3_tpm, 2, function(col) {
+  row_names <- Illumina_DexLPS_rep3_tpm[,1]
+  top_100_indices <- order(col, decreasing = TRUE)[1:100]
+  row_names[top_100_indices]
+})
+GO_Illumina_rep3 <- GO_Illumina_rep3[,2]
+GO_Illumina_rep3 <- sub("\\..*", "", GO_Illumina_rep3)
+GO_Illumina_rep3_result <- enrichGO(gene = GO_Illumina_rep3, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Illumina_rep3_result)
+fitIllumina_3 <- plot(barplot(GO_Illumina_rep3_result, showCategory = 20))
+fitIllumina_3    # 345 enriched terms found
+
+
+###unified DexLPS
+
+gene_Illumina = c(GO_Illumina_rep1,GO_Illumina_rep2,GO_Illumina_rep3)
+GO_Illumina_result <- enrichGO(gene = gene_Illumina, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Illumina_result)
+fitIllumina <- plot(barplot(GO_Illumina_result, showCategory = 20))
+fitIllumina   # 413 enriched terms found
+```
+
+```{r}
+fitIllumina_1
+fitIllumina_2
+fitIllumina_3
+fitIllumina
+```
+
+
+
+ENSEMBL -> ENTREZ ID
+```{r}
+entrez_ids_Nanopore_rep1 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Nanopore_rep1, keytype = "ENSEMBL", column = "ENTREZID")
+entrez_ids_Nanopore_rep2 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Nanopore_rep2, keytype = "ENSEMBL", column = "ENTREZID")
+entrez_ids_Nanopore_rep3 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Nanopore_rep3, keytype = "ENSEMBL", column = "ENTREZID")
+
+
+entrez_ids_Illumina_rep1 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Illumina_rep1, keytype = "ENSEMBL", column = "ENTREZID")
+entrez_ids_Illumina_rep2 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Illumina_rep2, keytype = "ENSEMBL", column = "ENTREZID")
+entrez_ids_Illumina_rep3 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Illumina_rep3, keytype = "ENSEMBL", column = "ENTREZID")
+
+```
+
+
+
+Function to process data for the geneCluster ::: (entrez_ids) == from above
+```{r}
+clean_entrez_ids <- function(entrez_ids) {
+  entrez_ids_list <- paste(entrez_ids, collapse=", ")
+  entrez_ids_list <- unlist(strsplit(entrez_ids_list, ", "))
+  cleaned <- entrez_ids_list %>%
+    str_trim() %>%
+    na_if("NA")
+  numeric_vector <- as.numeric(cleaned)
+  final_vector <- numeric_vector[!is.na(numeric_vector)]
+  final_vector <- c(final_vector, rep("", sum(entrez_ids_list == "")))
+  return(final_vector)
+}
+```
+
+
+
+```{r}
+ck_Nanopore_rep1 <- clean_entrez_ids(entrez_ids_Nanopore_rep1)
+ck_Nanopore_rep2 <- clean_entrez_ids(entrez_ids_Nanopore_rep2)
+ck_Nanopore_rep3 <- clean_entrez_ids(entrez_ids_Nanopore_rep3)
+
+
+ck_Illumina_rep1 <- clean_entrez_ids(entrez_ids_Illumina_rep1)
+ck_Illumina_rep2 <- clean_entrez_ids(entrez_ids_Illumina_rep2)
+ck_Illumina_rep3 <- clean_entrez_ids(entrez_ids_Illumina_rep3)
+
+```
+
+
+```{r}
+entrez_list <- list(Nanopore_rep1 = ck_Nanopore_rep1,Nanopore_rep2 = ck_Nanopore_rep2,Nanopore_rep3 = ck_Nanopore_rep3,Illumina_rep1 = ck_Illumina_rep1,Illumina_rep2 = ck_Illumina_rep2,Illumina_rep3 = ck_Illumina_rep3)
+```
+
+compareCluster() + enrichKEGG (compareCluster is a function of clusterProfiler)
+```{r}
+ck <- compareCluster(geneCluster = entrez_list, fun = "enrichKEGG", organism = "mmu")
+ck <-setReadable(ck, OrgDb = org.Mm.eg.db, keyType ="ENTREZID")
+head(ck)
+#Ill_rep1 : 14, Ill_rep2 : 31, Ill_rep3 : 38, Nanopore : 0 ::: number of enriched terms found for each gene cluster
+```
+
+```{r}
+dotplot(ck)
+```
+
+```{r}
+cnetplot(ck)
+```
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

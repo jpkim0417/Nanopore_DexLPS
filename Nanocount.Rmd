@@ -38,6 +38,8 @@ library(GenomicFeatures)
 library(dplyr)
 library(tidyr)
 library(stringr)
+install.packages("rtracklayer")
+library(rtracklayer)
 ```
 Import input data (Nanopore) vs (Illumina vs Nanopore)
 
@@ -57,6 +59,11 @@ samps
 ```
 
 GTF -> sqlite /// TxDB
+#There might be an error with "makeTxDbFromGFF(gtf), then it might be a probelm with 'rtracklayer'
+#to solve it, install.packages("rtracklayer").
+#sometimes even after update 'rtracklayer', still a problem. 
+#just "txdb <- makeTxDbFromGFF(gtf)' in the console, then it works.
+
 ```{r}
 gtf <- "gencode.vM32.chr_patch_hapl_scaff.annotation.gtf"
 txdb.filename <- "gencode.vM32.annotation.sqlite"
@@ -330,6 +337,7 @@ merged_data_tpm_2 = data.frame(gene_id = txdf.sub$GENEID, feature_id = txdf.sub$
 
 
 
+
 ```{r}
 
 plot_data <- data.frame(Sample = names(merged_data_tpm_counts), Row_Count = merged_data_tpm_counts)
@@ -448,13 +456,24 @@ merged_Isoform_average <- as.data.frame(merged_Isoform)
 average_DexLPS <- rowMeans(merged_Isoform_average[,2:4], na.rm = TRUE)
 average_LPS <- rowMeans(merged_Isoform_average[,5:7], na.rm = TRUE)
 
+
 merged_Isoform_average <- data.frame(
   gene_ID = merged_Isoform_average[,1],
-  DexLPS = average_DexLPS,
-  LPS = average_LPS
+  Nanopore_DexLPS = average_DexLPS,
+  Nanopore_LPS = average_LPS
 )
 
 ```
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -476,12 +495,25 @@ frequency_data_average <- merged_Isoform_average_long %>%
 
 
 ```{r}
+color_palette <- c(
+  "DexLPS_rep1" = "blue",
+  "DexLPS_rep2" = "deepskyblue",
+  "DexLPS_rep3" = "dodgerblue",
+  "LPS_rep1" = "orange",
+  "LPS_rep2" = "darkorange",
+  "LPS_rep3" = "orangered"
+)
+```
+
+
+```{r}
 ggplot(frequency_data, aes(x = gene_count, y = frequency, fill = sample)) +
-      geom_bar(stat = "identity", position = "dodge") +
-     labs(title = "Gene Counts Distribution of Frequency by sample",
+    geom_bar(stat = "identity", position = "dodge") +
+    scale_fill_manual(values = color_palette) +
+    labs(title = "Gene Counts Distribution of Frequency by sample",
           x = "Gene_Count",
           y = "Frequency") +
-      theme_minimal()
+    theme_minimal()
 
 ggplot(frequency_data_average, aes(x = gene_count, y = frequency, fill = sample)) +
   geom_bar(stat = "identity", position = "dodge") +
@@ -490,10 +522,20 @@ ggplot(frequency_data_average, aes(x = gene_count, y = frequency, fill = sample)
        y = "Frequency") +
   theme_minimal()
 ```
+```{r}
+frequency_data_average
+
+```
+
+```{r}
+custom_colors = c("Nanopore_LPS" = "orange", "Nanopore_DexLPS" = "blue")
+```
+
 
 ```{r}
 ggplot(frequency_data_average, aes(x = gene_count, fill = sample)) +
   geom_density(alpha = 0.5) +
+  scale_fill_manual(values = custom_colors) +
   labs(title = "Gene_Count_Distribution",
        x = "Gene_Count",
        y = "Frequency") +
@@ -517,7 +559,179 @@ BiocManager::install("org.Mm.eg.db")
 library(org.Mm.eg.db)
 ```
 
+#run enrichment analysis with the top 100 genes based on the isoform's number
+```{r}
+top_100_Nanopore_DexLPS_rep1 <- merged_Isoform %>%
+  arrange(desc(DexLPS_rep1)) %>%
+  slice(1:100) %>%
+  select(gene_ID, DexLPS_rep1)
+```
 
+```{r}
+GO_Nanopore_DexLPS_rep1 <- top_100_Nanopore_DexLPS_rep1[,1]
+GO_Nanopore_DexLPS_rep1 <- sub("\\..*", "", GO_Nanopore_DexLPS_rep1)
+GO_Nanopore_DexLPS_rep1_result <- enrichGO(gene = GO_Nanopore_DexLPS_rep1, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Nanopore_DexLPS_rep1_result)
+fitNanopore_1 <- plot(barplot(GO_Nanopore_DexLPS_rep1_result, showCategory = 20))
+```
+
+
+
+```{r}
+top_100_Nanopore_DexLPS_rep2 <- merged_Isoform %>%
+  arrange(desc(DexLPS_rep2)) %>%
+  slice(1:100) %>%
+  select(gene_ID, DexLPS_rep2)
+top_100_Nanopore_DexLPS_rep2
+```
+
+```{r}
+GO_Nanopore_DexLPS_rep2 <- top_100_Nanopore_DexLPS_rep2[,1]
+GO_Nanopore_DexLPS_rep2 <- sub("\\..*", "", GO_Nanopore_DexLPS_rep2)
+GO_Nanopore_DexLPS_rep2_result <- enrichGO(gene = GO_Nanopore_DexLPS_rep2, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Nanopore_DexLPS_rep2_result)
+fitNanopore_2 <- plot(barplot(GO_Nanopore_DexLPS_rep2_result, showCategory = 20))
+```
+
+
+
+```{r}
+top_100_Nanopore_DexLPS_rep3 <- merged_Isoform %>%
+  arrange(desc(DexLPS_rep3)) %>%
+  slice(1:100) %>%
+  select(gene_ID, DexLPS_rep3)
+top_100_Nanopore_DexLPS_rep3
+```
+```{r}
+GO_Nanopore_DexLPS_rep3 <- top_100_Nanopore_DexLPS_rep3[,1]
+GO_Nanopore_DexLPS_rep3 <- sub("\\..*", "", GO_Nanopore_DexLPS_rep3)
+GO_Nanopore_DexLPS_rep3_result <- enrichGO(gene = GO_Nanopore_DexLPS_rep3, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Nanopore_DexLPS_rep3_result)
+fitNanopore_3 <- plot(barplot(GO_Nanopore_DexLPS_rep3_result, showCategory = 20))
+```
+
+
+```{r}
+top_100_Nanopore_LPS_rep1 <- merged_Isoform %>%
+  arrange(desc(LPS_rep1)) %>%
+  slice(1:100) %>%
+  select(gene_ID, LPS_rep1)
+top_100_Nanopore_LPS_rep1
+```
+```{r}
+GO_Nanopore_LPS_rep1 <- top_100_Nanopore_LPS_rep1[,1]
+GO_Nanopore_LPS_rep1 <- sub("\\..*", "", GO_Nanopore_LPS_rep1)
+GO_Nanopore_LPS_rep1_result <- enrichGO(gene = GO_Nanopore_LPS_rep1, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Nanopore_LPS_rep1_result)
+fitNanopore_LPS_1 <- plot(barplot(GO_Nanopore_LPS_rep1_result, showCategory = 20))
+```
+
+
+```{r}
+top_100_Nanopore_LPS_rep2 <- merged_Isoform %>%
+  arrange(desc(LPS_rep2)) %>%
+  slice(1:100) %>%
+  select(gene_ID, LPS_rep2)
+top_100_Nanopore_LPS_rep2
+```
+```{r}
+GO_Nanopore_LPS_rep2 <- top_100_Nanopore_LPS_rep2[,1]
+GO_Nanopore_LPS_rep2 <- sub("\\..*", "", GO_Nanopore_LPS_rep2)
+GO_Nanopore_LPS_rep2_result <- enrichGO(gene = GO_Nanopore_LPS_rep2, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Nanopore_LPS_rep2_result)
+fitNanopore_LPS_2 <- plot(barplot(GO_Nanopore_LPS_rep2_result, showCategory = 20))
+```
+
+```{r}
+top_100_Nanopore_LPS_rep3 <- merged_Isoform %>%
+  arrange(desc(LPS_rep3)) %>%
+  slice(1:100) %>%
+  select(gene_ID, LPS_rep3)
+top_100_Nanopore_LPS_rep3
+```
+```{r}
+GO_Nanopore_LPS_rep3 <- top_100_Nanopore_LPS_rep3[,1]
+GO_Nanopore_LPS_rep3 <- sub("\\..*", "", GO_Nanopore_LPS_rep3)
+GO_Nanopore_LPS_rep3_result <- enrichGO(gene = GO_Nanopore_LPS_rep3, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Nanopore_LPS_rep3_result)
+fitNanopore_LPS_3 <- plot(barplot(GO_Nanopore_LPS_rep3_result, showCategory = 20))
+```
+
+
+```{r}
+entrez_ids_DL_rep1 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Nanopore_DexLPS_rep1, keytype = "ENSEMBL", column = "ENTREZID")
+entrez_ids_DL_rep2 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Nanopore_DexLPS_rep2, keytype = "ENSEMBL", column = "ENTREZID")
+entrez_ids_DL_rep3 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Nanopore_DexLPS_rep3, keytype = "ENSEMBL", column = "ENTREZID")
+
+entrez_ids_LPS_rep1 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Nanopore_LPS_rep1, keytype = "ENSEMBL", column = "ENTREZID")
+entrez_ids_LPS_rep2 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Nanopore_LPS_rep2, keytype = "ENSEMBL", column = "ENTREZID")
+entrez_ids_LPS_rep3 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Nanopore_LPS_rep3, keytype = "ENSEMBL", column = "ENTREZID")
+
+```
+
+```{r}
+clean_entrez_ids <- function(entrez_ids) {
+  entrez_ids_list <- paste(entrez_ids, collapse=", ")
+  entrez_ids_list <- unlist(strsplit(entrez_ids_list, ", "))
+  cleaned <- entrez_ids_list %>%
+    str_trim() %>%
+    na_if("NA")
+  numeric_vector <- as.numeric(cleaned)
+  final_vector <- numeric_vector[!is.na(numeric_vector)]
+  final_vector <- c(final_vector, rep("", sum(entrez_ids_list == "")))
+  return(final_vector)
+}
+```
+
+
+```{r}
+ck_DL_rep1 <- clean_entrez_ids(entrez_ids_DL_rep1)
+ck_DL_rep2 <- clean_entrez_ids(entrez_ids_DL_rep2)
+ck_DL_rep3 <- clean_entrez_ids(entrez_ids_DL_rep3)
+
+
+ck_LPS_rep1 <- clean_entrez_ids(entrez_ids_LPS_rep1)
+ck_LPS_rep2 <- clean_entrez_ids(entrez_ids_LPS_rep2)
+ck_LPS_rep3 <- clean_entrez_ids(entrez_ids_LPS_rep3)
+
+```
+
+```{r}
+entrez_list <- list(DL_rep1 = ck_DL_rep1,DL_rep2 = ck_DL_rep2,DL_rep3 = ck_DL_rep3,LPS_rep1 = ck_LPS_rep1,LPS_rep2 = ck_LPS_rep2,LPS_rep3 = ck_LPS_rep3)
+```
+
+
+```{r}
+ck <- compareCluster(geneCluster = entrez_list, fun = "enrichKEGG", organism = "mmu")
+ck <-setReadable(ck, OrgDb = org.Mm.eg.db, keyType ="ENTREZID")
+head(ck)
+#DexLPS_rep1 : 2, DexLPS_rep2 : 2, DexLPS_rep3 : 2, LPS_rep1 :2, LPS_rep2 : 2, LPS_rep3 : 2 ::: number of enriched terms found for each gene cluster
+```
+
+```{r}
+dotplot(ck)
+```
+
+```{r}
+cnetplot(ck)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+=====================================need to be fixed and better to ignore/I keep this just in case==========================
 ###DexLPS Ontology
 ```{r, echo=FALSE}
 ###DexLPS Ontology

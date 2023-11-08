@@ -26,6 +26,8 @@ library(GenomicFeatures)
 library(dplyr)
 library(tidyr)
 library(stringr)
+install.packages("rtracklayer")
+library(rtracklayer)
 ```
 
 ###GO annotation
@@ -56,6 +58,10 @@ samps
 ```
 
 GTF -> sqlite /// TxDB
+#There might be an error with "makeTxDbFromGFF(gtf), then it might be a probelm with 'rtracklayer'
+#to solve it, install.packages("rtracklayer").
+#sometimes even after update 'rtracklayer', still a problem. 
+#just "txdb <- makeTxDbFromGFF(gtf)' in the console, then it works.
 ```{r}
 gtf <- "gencode.vM32.chr_patch_hapl_scaff.annotation.gtf"
 txdb.filename <- "gencode.vM32.annotation.sqlite"
@@ -217,6 +223,12 @@ length(unique(dex.padj[dex.padj$gene < 0.05,]$groupID)) #416 screened genes in t
 table(dex.padj$transcript < 0.05)
 ```
 
+```{r}
+dex.padj$transcript < 0.05 
+#Let's run this if they generate list of isoforms.
+```
+
+
 #Exporting results
 
 ```{r}
@@ -343,7 +355,7 @@ merged_data_Illumina_tpm_2 = data.frame(gene_id = txdf.sub$GENEID, feature_id = 
 
 ```{r}
 plot_data <- data.frame(Sample = names(merged_data_Illumina_tpm_counts), Row_Count = merged_data_Illumina_tpm_counts)
-sample_colors <- c("blue","blue","blue","orange","orange","orange")
+sample_colors <- c("green","green","green","blue","blue","blue")
 ggplot(plot_data, aes(x = Sample, y = Row_Count, fill = Sample)) +
   geom_bar(stat = "identity") + 
   scale_fill_manual(values = sample_colors) +
@@ -486,12 +498,25 @@ frequency_data_average <- merged_Isoform_average_long %>%
 ```
 
 ```{r}
+color_palette <- c(
+  "Nanopore_DexLPS_rep1" = "blue",
+  "Nanopore_DexLPS_rep2" = "deepskyblue",
+  "Nanopore_DexLPS_rep3" = "dodgerblue",
+  "Illumina_DexLPS_rep1" = "green",
+  "Illumina_DexLPS_rep2" = "darkgreen",
+  "Illumina_DexLPS_rep3" = "lightgreen"
+)
+```
+
+
+```{r}
 ggplot(frequency_data, aes(x = gene_count, y = frequency, fill = sample)) +
-      geom_bar(stat = "identity", position = "dodge") +
-     labs(title = "Gene Counts Distribution of Frequency by sample (Nanopore vs. Illumina)",
+    geom_bar(stat = "identity", position = "dodge") +
+    scale_fill_manual(values = color_palette) +
+    labs(title = "Gene Counts Distribution of Frequency by sample (Nanopore vs. Illumina)",
           x = "Gene_Count",
           y = "Frequency") +
-      theme_minimal()
+    theme_minimal()
 
 ggplot(frequency_data_average, aes(x = gene_count, y = frequency, fill = sample)) +
   geom_bar(stat = "identity", position = "dodge") +
@@ -502,8 +527,14 @@ ggplot(frequency_data_average, aes(x = gene_count, y = frequency, fill = sample)
 ```
 
 ```{r}
+custom_colors = c("Illumina_DexLPS" = "green", "Nanopore_DexLPS" = "blue")
+```
+
+
+```{r}
 ggplot(frequency_data_average, aes(x = gene_count, fill = sample)) +
   geom_density(alpha = 0.5) +
+  scale_fill_manual(values = custom_colors) +
   labs(title = "Gene_Count_Distribution (Nanopore vs. Illumina)",
        x = "Gene_Count",
        y = "Frequency") +
@@ -523,7 +554,177 @@ BiocManager::install("org.Mm.eg.db")
 library(org.Mm.eg.db)
 ```
 
-###Nanopore_DexLPS Ontology
+#run enrichment analysis with the top 100 genes based on the isoform's number
+```{r}
+top_100_Nanopore_DexLPS_rep1 <- merged_Isoform %>%
+  arrange(desc(Nanopore_DexLPS_rep1)) %>%
+  slice(1:100) %>%
+  select(gene_ID, Nanopore_DexLPS_rep1)
+```
+
+```{r}
+GO_Nanopore_DexLPS_rep1 <- top_100_Nanopore_DexLPS_rep1[,1]
+GO_Nanopore_DexLPS_rep1 <- sub("\\..*", "", GO_Nanopore_DexLPS_rep1)
+GO_Nanopore_DexLPS_rep1_result <- enrichGO(gene = GO_Nanopore_DexLPS_rep1, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Nanopore_DexLPS_rep1_result)
+fitNanopore_1 <- plot(barplot(GO_Nanopore_DexLPS_rep1_result, showCategory = 20))
+```
+
+```{r}
+top_100_Nanopore_DexLPS_rep2 <- merged_Isoform %>%
+  arrange(desc(Nanopore_DexLPS_rep2)) %>%
+  slice(1:100) %>%
+  select(gene_ID, Nanopore_DexLPS_rep2)
+top_100_Nanopore_DexLPS_rep2
+```
+
+```{r}
+GO_Nanopore_DexLPS_rep2 <- top_100_Nanopore_DexLPS_rep2[,1]
+GO_Nanopore_DexLPS_rep2 <- sub("\\..*", "", GO_Nanopore_DexLPS_rep2)
+GO_Nanopore_DexLPS_rep2_result <- enrichGO(gene = GO_Nanopore_DexLPS_rep2, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Nanopore_DexLPS_rep2_result)
+fitNanopore_2 <- plot(barplot(GO_Nanopore_DexLPS_rep2_result, showCategory = 20))
+```
+
+
+```{r}
+top_100_Nanopore_DexLPS_rep3 <- merged_Isoform %>%
+  arrange(desc(Nanopore_DexLPS_rep3)) %>%
+  slice(1:100) %>%
+  select(gene_ID, Nanopore_DexLPS_rep3)
+top_100_Nanopore_DexLPS_rep3
+```
+```{r}
+GO_Nanopore_DexLPS_rep3 <- top_100_Nanopore_DexLPS_rep3[,1]
+GO_Nanopore_DexLPS_rep3 <- sub("\\..*", "", GO_Nanopore_DexLPS_rep3)
+GO_Nanopore_DexLPS_rep3_result <- enrichGO(gene = GO_Nanopore_DexLPS_rep3, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Nanopore_DexLPS_rep3_result)
+fitNanopore_3 <- plot(barplot(GO_Nanopore_DexLPS_rep3_result, showCategory = 20))
+```
+
+
+```{r}
+top_100_Illumina_DexLPS_rep1 <- merged_Isoform %>%
+  arrange(desc(Illumina_DexLPS_rep1)) %>%
+  slice(1:100) %>%
+  select(gene_ID, Illumina_DexLPS_rep1)
+top_100_Illumina_DexLPS_rep1
+```
+
+```{r}
+GO_Illumina_DexLPS_rep1 <- top_100_Illumina_DexLPS_rep1[,1]
+GO_Illumina_DexLPS_rep1 <- sub("\\..*", "", GO_Illumina_DexLPS_rep1)
+GO_Illumina_DexLPS_rep1_result <- enrichGO(gene = GO_Illumina_DexLPS_rep1, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Illumina_DexLPS_rep1_result)
+fitIllumina_1 <- plot(barplot(GO_Illumina_DexLPS_rep1_result, showCategory = 20))
+```
+
+
+```{r}
+top_100_Illumina_DexLPS_rep2 <- merged_Isoform %>%
+  arrange(desc(Illumina_DexLPS_rep2)) %>%
+  slice(1:100) %>%
+  select(gene_ID, Illumina_DexLPS_rep2)
+top_100_Illumina_DexLPS_rep2
+```
+```{r}
+GO_Illumina_DexLPS_rep2 <- top_100_Illumina_DexLPS_rep2[,1]
+GO_Illumina_DexLPS_rep2 <- sub("\\..*", "", GO_Illumina_DexLPS_rep2)
+GO_Illumina_DexLPS_rep2_result <- enrichGO(gene = GO_Illumina_DexLPS_rep2, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Illumina_DexLPS_rep2_result)
+fitIllumina_2 <- plot(barplot(GO_Illumina_DexLPS_rep2_result, showCategory = 20))
+```
+
+
+```{r}
+top_100_Illumina_DexLPS_rep3 <- merged_Isoform %>%
+  arrange(desc(Illumina_DexLPS_rep3)) %>%
+  slice(1:100) %>%
+  select(gene_ID, Illumina_DexLPS_rep3)
+top_100_Illumina_DexLPS_rep3
+```
+
+
+```{r}
+GO_Illumina_DexLPS_rep3 <- top_100_Illumina_DexLPS_rep3[,1]
+GO_Illumina_DexLPS_rep3 <- sub("\\..*", "", GO_Illumina_DexLPS_rep3)
+GO_Illumina_DexLPS_rep3_result <- enrichGO(gene = GO_Illumina_DexLPS_rep3, OrgDb = "org.Mm.eg.db", keyType = "ENSEMBL", ont = "BP")
+as.data.frame(GO_Illumina_DexLPS_rep3_result)
+fitIllumina_3 <- plot(barplot(GO_Illumina_DexLPS_rep3_result, showCategory = 20))
+```
+
+
+```{r}
+entrez_ids_Nanopore_DexLPS_rep1 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Nanopore_DexLPS_rep1, keytype = "ENSEMBL", column = "ENTREZID")
+entrez_ids_Nanopore_DexLPS_rep2 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Nanopore_DexLPS_rep2, keytype = "ENSEMBL", column = "ENTREZID")
+entrez_ids_Nanopore_DexLPS_rep3 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Nanopore_DexLPS_rep3, keytype = "ENSEMBL", column = "ENTREZID")
+
+
+entrez_ids_Illumina_DexLPS_rep1 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Illumina_DexLPS_rep1, keytype = "ENSEMBL", column = "ENTREZID")
+entrez_ids_Illumina_DexLPS_rep2 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Illumina_DexLPS_rep2, keytype = "ENSEMBL", column = "ENTREZID")
+entrez_ids_Illumina_DexLPS_rep3 <- mapIds(org.Mm.eg.db, dataset = "mmusculus_gene_ensembl", keys = GO_Illumina_DexLPS_rep3, keytype = "ENSEMBL", column = "ENTREZID")
+```
+
+```{r}
+clean_entrez_ids <- function(entrez_ids) {
+  entrez_ids_list <- paste(entrez_ids, collapse=", ")
+  entrez_ids_list <- unlist(strsplit(entrez_ids_list, ", "))
+  cleaned <- entrez_ids_list %>%
+    str_trim() %>%
+    na_if("NA")
+  numeric_vector <- as.numeric(cleaned)
+  final_vector <- numeric_vector[!is.na(numeric_vector)]
+  final_vector <- c(final_vector, rep("", sum(entrez_ids_list == "")))
+  return(final_vector)
+}
+```
+
+```{r}
+ck_Nanopore_rep1 <- clean_entrez_ids(entrez_ids_Nanopore_DexLPS_rep1)
+ck_Nanopore_rep2 <- clean_entrez_ids(entrez_ids_Nanopore_DexLPS_rep2)
+ck_Nanopore_rep3 <- clean_entrez_ids(entrez_ids_Nanopore_DexLPS_rep3)
+
+
+ck_Illumina_rep1 <- clean_entrez_ids(entrez_ids_Illumina_DexLPS_rep1)
+ck_Illumina_rep2 <- clean_entrez_ids(entrez_ids_Illumina_DexLPS_rep2)
+ck_Illumina_rep3 <- clean_entrez_ids(entrez_ids_Illumina_DexLPS_rep3)
+```
+
+```{r}
+entrez_list <- list(Nanopore_rep1 = ck_Nanopore_rep1,Nanopore_rep2 = ck_Nanopore_rep2,Nanopore_rep3 = ck_Nanopore_rep3,Illumina_rep1 = ck_Illumina_rep1,Illumina_rep2 = ck_Illumina_rep2,Illumina_rep3 = ck_Illumina_rep3)
+```
+
+```{r}
+ck <- compareCluster(geneCluster = entrez_list, fun = "enrichKEGG", organism = "mmu")
+ck <-setReadable(ck, OrgDb = org.Mm.eg.db, keyType ="ENTREZID")
+head(ck)
+
+#Nanopore_rep1 : 2, Nanopore_rep2 : 2, Nanopore_rep3 : 2, Illumina_rep1 : 2, Illumina_rep2 : 2, Illumina_rep3 : 10 ::: number of enriched terms found for each gene cluster
+```
+
+```{r}
+dotplot(ck)
+```
+
+
+```{r}
+cnetplot(ck)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+=====================================need to be fixed and better to ignore/I keep this just in case==========================
+###Nanopore_DexLPS Ontology with TPM but wrong 
 ```{r, echo=FALSE}
 Nanopore_DexLPS_rep1_tpm <- merged_data_Illumina_tpm_2[,c(1,3)]
 GO_Nanopore_DexLPS_rep1 <- apply(Nanopore_DexLPS_rep1_tpm, 2, function(col) {
@@ -574,6 +775,7 @@ fitNanopore <- plot(barplot(GO_Nanopore_result, showCategory = 20))
 fitNanopore # 87 enriched terms found
 
 ```
+
 ```{r}
 
 fitNanopore_1
